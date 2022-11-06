@@ -1,3 +1,5 @@
+use std::net::SocketAddr;
+
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::TcpListener,
@@ -7,7 +9,7 @@ use tokio::{
 #[tokio::main]
 async fn main() {
     let tcp_listener = TcpListener::bind("0.0.0.0:8080").await.unwrap();
-    let (channel_send, _) = broadcast::channel::<String>(10);
+    let (channel_send, _) = broadcast::channel::<(String, SocketAddr)>(10);
     loop {
         let (mut socket, addr) = tcp_listener.accept().await.unwrap();
         let channel_send = channel_send.clone();
@@ -21,12 +23,14 @@ async fn main() {
             loop {
                 tokio::select! {
                     num_of_bytes = br.read_line(&mut message) => {
-                        channel_send.send(message.clone()).unwrap();
+                        channel_send.send((message.clone(), addr)).unwrap();
                         message.clear();
                     }
                     recv_msg = channel_read.recv() => {
-                        let recv_msg = recv_msg.unwrap();
-                        socket_writer.write_all(recv_msg.as_bytes()).await.unwrap();
+                        let (recv_msg, o_addr) = recv_msg.unwrap();
+                        if addr != o_addr {
+                            socket_writer.write_all(recv_msg.as_bytes()).await.unwrap();
+                        }
                     }
                 }
             }

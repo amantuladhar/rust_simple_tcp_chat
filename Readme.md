@@ -386,4 +386,31 @@ loop {
 - If you run the app with few clients you can now see they can pass message to one another
 
 ## Client to not receive their own message
+```rust
+use std::net::SocketAddr;
+//...
+#[tokio::main]
+async fn main() {
+    let tcp_listener = TcpListener::bind("0.0.0.0:8080").await.unwrap();
+    let (channel_send, _) = broadcast::channel::<(String, SocketAddr)>(10); // 1
+    loop {
+        let (mut socket, addr) = tcp_listener.accept().await.unwrap();
+        //..
+            loop {
+                tokio::select! {
+                    num_of_bytes = br.read_line(&mut message) => {
+                        channel_send.send((message.clone(), addr)).unwrap(); // 2
+                        message.clear();
+                    }
+                    recv_msg = channel_read.recv() => {
+                        let (recv_msg, o_addr) = recv_msg.unwrap(); // 3
+                        if addr != o_addr { // 4
+                            socket_writer.write_all(recv_msg.as_bytes()).await.unwrap();
+                        }
+                        //...
+```
+- `1` Change your channel type to receive tuple of message and client addr
+- `2` When sending message to broadcast channel, also send client adddr
+- `3` when receiving destructure a tuple
+- `4` Write message to socket only if address doesn't match
 
