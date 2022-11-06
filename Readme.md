@@ -171,7 +171,80 @@ Connection closed by foreign host.
 ```
 - Just call clear() method on our message container
 
-## Multiple Client
+## (Attempt 1) Multiple Client
+```rust
+    loop { // 1
+        let (mut socket, addr) = tcp_listener.accept().await.unwrap(); // 2
+        //...
+        loop {
+            let num_of_bytes_read = br.read_line(&mut message).await.unwrap();
+            socket_writer.write_all(message.as_bytes()).await.unwrap();
+            message.clear();
+        }
+    }
+```
+- `1` wrap the whole code in loop - starting from where we start to accept client
+- `2` this is where we accept client
+- Notice this doesn't quite work well, if you follow code code
+- We have not introduced the concurrent code yet. As it stands right now, our code will
+    - Wait for client_1 connect
+    - Wait a message from client_1
+    - Send message back to client_1
+    - Wait a message from client_1
+    - ...
+- Our code nevers breaks the inner loop
+- To make this work we need to make our code asyncronous
 
+## (Attempt 2) Multiple Client - tokio to rescue AGAIN
+```rust
+    loop {
+        let (mut socket, addr) = tcp_listener.accept().await.unwrap();
 
+        tokio::spawn(async move { // 1
+            let (socket_reader, mut socket_writer) = socket.split();
+
+            let mut br = BufReader::new(socket_reader);
+            let mut message = String::new();
+
+            loop {
+                let num_of_bytes_read = br.read_line(&mut message).await.unwrap();
+                socket_writer.write_all(message.as_bytes()).await.unwrap();
+                message.clear();
+            }
+        });
+    }
+```
+- `2` we use tokio spawn method to do our work in different thread.
+- This way our code doesn't wait for inner loop to finish (which we know it never exits)
+- Now the code flow will look something like this
+    - wait for client_1
+    - as soon as client_1 is connect - process client_1 message on different thread
+    - don't wait for client_1 work, start to wait for different client
+    - after client_2 connects, client_2 will get a new thread again
+
+```bash
+# Client 1
+Trying ::1...
+telnet: connect to address ::1: Connection refused
+Trying 127.0.0.1...
+Connected to localhost.
+Escape character is '^]'.
+1 👈 Send
+1 👈 Receive
+1 👈 Send
+1 👈 Receive
+
+# Client 2
+Trying ::1...
+telnet: connect to address ::1: Connection refused
+Trying 127.0.0.1...
+Connected to localhost.
+Escape character is '^]'.
+2 👈 Send
+2 👈 Receive
+2 👈 Send
+2 👈 Receive
+```
+- Note client are still isolated, they are not communicating with one another
+- But both client can chat with one another concurrently.
 
