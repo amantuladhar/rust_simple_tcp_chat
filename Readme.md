@@ -156,5 +156,22 @@ Escape character is '^]'.
 3 👈 Receive
 Connection closed by foreign host.
 ```
-- 
+- You can see now we can send multiple messages
+- But we have a weired behavior. Everytime we receive the message, server sends us all of previous messages as well.
+- This happens because by defaut BufReader doesn't remove the previous content it read. It is up to us to delete reset the content.
+- Why? BufReader can be use to read the large file line by line. We don't want to delete the previous line when we read new line.
+
+## Reset the previous messages so client doesn't get duplicate message
+```rust
+    loop {
+        let num_of_bytes_read = br.read_line(&mut message).await.unwrap();
+        socket_writer.write_all(message.as_bytes()).await.unwrap();
+        message.clear(); // 1
+    }
+```
+- Just call clear() method on our message container
+
+## Multiple Client
+
+
 

@@ -14,6 +14,7 @@ async fn main() {
 
     loop {
         let num_of_bytes_read = br.read_line(&mut message).await.unwrap();
-        socket_writer.write_all(message.as_bytes()).await.unwrap()
+        socket_writer.write_all(message.as_bytes()).await.unwrap();
+        message.clear();
     }
 }
