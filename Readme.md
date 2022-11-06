@@ -248,3 +248,142 @@ Escape character is '^]'.
 - Note client are still isolated, they are not communicating with one another
 - But both client can chat with one another concurrently.
 
+## Clients talk to each other
+- To make client talk to each other needs a bit of work
+- For them to communicate we need to
+    - create a broadcast channel
+    - send message to broadcast channel
+    - receive message from broadcast channel
+- for this to work, all client that are connected needs to use same broadcast channel
+
+## Create a broadcast channel where client can send and receive message
+```rust
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    net::TcpListener,
+    sync::broadcast,
+};
+// ...
+async fn main() {
+    let tcp_listener = TcpListener::bind("0.0.0.0:8080").await.unwrap();
+    let (channel_send, channel_read) = broadcast::channel::<String>(10); // 1
+    loop {
+    //...
+```
+- `1` Here we are creating a channel that can send and receive strings
+
+## Send message to broadcast channel when message is received
+```rust
+    // ERROR - doesn't compile
+    let (channel_send, channel_read) = broadcast::channel::<String>(10);
+    loop {
+        let (mut socket, addr) = tcp_listener.accept().await.unwrap();
+        tokio::spawn(async move {
+            //...
+            loop {
+                let num_of_bytes_read = br.read_line(&mut message).await.unwrap();
+                channel_send.send(message.clone()); // 1
+                //...
+```
+- `1` Send a message to broadcast. This will fail because rust will yell at you for using shared value inside of loop.
+- Note we are sending clone of message to make sure we don't transfer ownership on message variable to send() method.
+- Thankfully channel_send as a clone() method to borrow the copy. Note internally Sender<T> is using Arc to manage borrow state for concurrent code.
+
+```rust
+    //...
+    let (channel_send, channel_read) = broadcast::channel::<String>(10);
+    loop {
+        let (mut socket, addr) = tcp_listener.accept().await.unwrap();
+        let channel_send = channel_send.clone(); // 1
+        tokio::spawn(async move {
+            let (socket_reader, mut socket_writer) = socket.split();
+    //...
+```
+- `1` clone() the channel_send to borrow the referance. 
+
+## Read message from broadcast channel
+```rust
+  let (mut socket, addr) = tcp_listener.accept().await.unwrap();
+  let channel_send = channel_send.clone();
+  let channel_read = channel_send.subscribe(); // 1
+```
+- We subscribe to broadcast channel using sender.
+- It is different than how we clone channel_send but it is the API
+
+```rust
+loop {
+    let num_of_bytes_read = br.read_line(&mut message).await.unwrap();
+    channel_send.send(message.clone()).unwrap();
+
+    let recv_msg = channel_read.recv().await.unwrap(); // 1
+    socket_writer.write_all(recv_msg.as_bytes()).await.unwrap(); // 2
+    message.clear();
+}
+```
+- `1` Read the message from channel instead of using `message` where message already exist. Why? We will get answer to this in a bit
+- `2` Write to client the message read from broadcast channel
+
+## (Run 4)
+- If you run the app and connect 2 client we will see weired behavior
+- If you send multiple message on all clients, you can see we are technically sending the message between clients
+- But the message are being transfered to client in weired order
+- If you look at the code, I hope you can see why
+- We changed our code to use broadcast, but technically we have not changed anything yet
+- Out code still reads the message from client and only after the read is complete client receives the message
+```rust
+loop {
+    let num_of_bytes_read = br.read_line(&mut message).await.unwrap(); // 1
+    channel_send.send(message.clone()).unwrap();
+
+    let recv_msg = channel_read.recv().await.unwrap(); // 2
+    socket_writer.write_all(recv_msg.as_bytes()).await.unwrap();
+    message.clear();
+}
+```
+- `1` Each client runs this code first. That is, it waits for client to send message
+- `2` This is where we receive the message
+- After message is received from client we broadcast to our shared channel
+- Note all client will have same behavior. To get the message, client needs to send something
+- To fix this we have to somehow make sending and receiving message asyncronous too
+
+## Making sending and receiving message asyncronous to each other
+- There are multiple ways to go about this issue
+
+Approach 1
+
+- We can technically spawn a new thread with `tokio::spawn` to do these task on their individual threads.
+- This would technically solve our issue, but if we go that route it will take a bit of errort because of how tokio (rust async) spawns a thread.
+- In short we will get into lifetime issues, as tokio thread expects all variable we `move` inside a thead has a `static` lifetime. But our channel, buf_reader and other stuff are not `static` lifetime
+
+Approach 2
+
+- tokio has a helper macro `tokio::select!`.
+- This is almost similar to golang select statement for their channel
+- In simple terms we can define multiple futures and which ever comes first gets executed
+```rust
+loop {
+    tokio::select! {
+        num_of_bytes = br.read_line(&mut message) => { // 1
+            channel_send.send(message.clone()).unwrap();
+            message.clear();
+        }
+        recv_msg = channel_read.recv() => { // 2
+            let recv_msg = recv_msg.unwrap();
+            socket_writer.write_all(recv_msg.as_bytes()).await.unwrap();
+        }
+    }
+}
+```
+- `1` define the first future. Notice we don't have to use `await`
+- `2` second future to read the message
+- `tokio::select!` will execute one future - whichever resolves first
+- because we are wrapping `tokio::select!` on `loop` we will perform same task over and over again
+- Note that `tokio::select!` is blocking, it blocks the code until one of the futures defines resolves
+- In our case, out inner loop waits until either we receive a message from client OR we receive a message from our broadcast channel
+- Once message is received we execute the code. Note that loop will restart only after a block has finished executing.
+
+## (Run 5)
+- If you run the app with few clients you can now see they can pass message to one another
+
+## Client to not receive their own message
+
