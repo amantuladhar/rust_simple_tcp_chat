@@ -23,6 +23,9 @@ async fn main() {
             loop {
                 tokio::select! {
                     num_of_bytes = br.read_line(&mut message) => {
+                        if num_of_bytes.unwrap() == 0 {
+                            break;
+                        }
                         channel_send.send((message.clone(), addr)).unwrap();
                         message.clear();
                     }

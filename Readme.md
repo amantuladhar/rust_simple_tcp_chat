@@ -414,3 +414,18 @@ async fn main() {
 - `3` when receiving destructure a tuple
 - `4` Write message to socket only if address doesn't match
 
+## Disconnecting client
+```rust
+tokio::select! {
+    num_of_bytes = br.read_line(&mut message) => {
+        if num_of_bytes.unwrap() == 0 { // 1
+            break;
+        }
+        channel_send.send((message.clone(), addr)).unwrap();
+        message.clear();
+    }
+```
+- `1` if number of types we read is 0, that means client disconnect.
+- We can break out of the loop, which will in turn make reader and writer go out of scope
+- When this happens tokio will shutdownt the TcpStream for the client for us
+
